@@ -42,6 +42,7 @@ const firebaseConfig = {
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const auth = firebase.auth(); // Init Auth
 
 // --- TWILIO CONFIGURATION ---
 const TWILIO_ACTIONS_URL = "https://just-cleaning-crm-8720.twil.io/website-actions";
@@ -79,7 +80,7 @@ const CHAT_PRESETS = {
 
 // --- COMPONENTS ---
 
-// 1. Create Lead Modal (UPDATED: SENDS WELCOME SMS ON CREATION)
+// 1. Create Lead Modal (Welcome Text ON)
 const CreateLeadModal = ({ onClose }) => {
   const [formData, setFormData] = useState({ name: "", phone: "", address: "", service: "Interior Cleaning", details: "" });
   const [loading, setLoading] = useState(false);
@@ -89,18 +90,16 @@ const CreateLeadModal = ({ onClose }) => {
     e.preventDefault();
     setLoading(true);
     try {
-      // 1. Create Lead in Database
       await db.collection("leads").add({ ...formData, status: "New", createdAt: new Date().toISOString() });
       
-      // 2. IMMEDIATE WELCOME TEXT
-      // This sends the request to Twilio instantly when you click "Create Lead"
-      await fetch(TWILIO_ACTIONS_URL, {
+      // Auto-Send Welcome Text
+      fetch(TWILIO_ACTIONS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'welcome', to: formData.phone, name: formData.name })
-      });
+      }).catch(err => console.error(err));
 
-      alert("Lead created & Welcome Message sent!");
+      alert("Lead created & Welcome Text Sent!");
       onClose();
     } catch (err) { alert("Error: " + err.message); }
     setLoading(false);
@@ -473,11 +472,22 @@ const AdminPanel = ({ user, onLogout }) => {
   );
 };
 
-// 7. Login, Analytics, QuoteForm (Standard)
+// 7. Login, Analytics, QuoteForm (Authentication Enabled)
 const Login = ({ onLogin }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const handleSubmit = (e) => { e.preventDefault(); if (email && password) onLogin(email); };
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await auth.signInWithEmailAndPassword(email, password);
+      // Auth listener in App component will handle the redirection
+    } catch (err) {
+      setError("Invalid email or password.");
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4 animate-fade-in">
       <div className="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-md border border-slate-700 animate-scale-in">
@@ -485,6 +495,7 @@ const Login = ({ onLogin }) => {
         <form onSubmit={handleSubmit} className="space-y-6">
           <input type="email" required className="w-full bg-slate-700 border border-slate-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="admin@justcleanings.ca" value={email} onChange={(e) => setEmail(e.target.value)} />
           <input type="password" required className="w-full bg-slate-700 border border-slate-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg hover:scale-105 transition-all">Login</button>
         </form>
       </div>
@@ -544,13 +555,32 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [view, setView] = useState("landing");
   const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => { const u = localStorage.getItem("crm_user"); if (u) { setUser({ email: u }); setView("admin"); } }, []);
-  const handleLogin = (e) => { setUser({ email: e }); localStorage.setItem("crm_user", e); setView("admin"); };
-  const handleLogout = () => { setUser(null); localStorage.removeItem("crm_user"); setView("landing"); };
+  // Monitor Firebase Auth State
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(u => {
+      if (u) {
+        setUser(u);
+        setView("admin");
+      } else {
+        setUser(null);
+        setView("landing"); // Or keep it on Landing/Login depending on preference
+      }
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleLogout = () => { auth.signOut(); };
+
+  if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-blue-400">Loading...</div>;
 
   if (success) return <div className="min-h-screen bg-blue-600 flex items-center justify-center p-4 animate-fade-in"><div className="bg-white p-8 rounded-2xl shadow-xl text-center animate-scale-in"><h2 className="text-2xl font-bold mb-2">Quote Requested!</h2><button onClick={() => setSuccess(false)} className="bg-gray-900 text-white py-3 px-8 rounded-lg mt-4 hover:scale-105 transition-all">Back</button></div></div>;
-  if (view === "admin") return user ? <AdminPanel user={user} onLogout={handleLogout} /> : <Login onLogin={handleLogin} />;
+  
+  if (view === "admin") return user ? <AdminPanel user={user} onLogout={handleLogout} /> : <Login />;
+  
+  // Default to Landing Page
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-slate-800 animate-fade-in">
       <nav className="bg-white shadow-sm p-4 sticky top-0 z-50 flex justify-between max-w-4xl mx-auto"><span className="font-bold text-lg text-blue-600">Just Cleanings</span><button onClick={() => setView("admin")} className="text-xs font-bold text-gray-400 hover:text-blue-600 transition-colors">Owner Login</button></nav>
